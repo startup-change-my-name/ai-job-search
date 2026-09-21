@@ -1,0 +1,180 @@
+name: job-control
+
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE:?Set AIRFLOW_IMAGE}
+  environment: &airflow-environment
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    TZ: ${TZ}
+  user: "${AIRFLOW_UID}:0"
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-dependencies
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks: [control, data, egress]
+  restart: unless-stopped
+
+x-airflow-health: &airflow-health
+  interval: 30s
+  timeout: 20s
+  retries: 10
+  start_period: 60s
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      AIRFLOW_DB: ${AIRFLOW_DB:?Set AIRFLOW_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-airflow-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+    restart: unless-stopped
+
+  redis:
+    image: ${REDIS_IMAGE:?Set REDIS_IMAGE}
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    command: ["bash", "-lc", "airflow db migrate"]
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: ["api-server"]
+    healthcheck:
+      <<: *airflow-health
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+    depends_on:
+      <<: *airflow-dependencies
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ["scheduler"]
+    healthcheck:
+      <<: *airflow-health
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+    depends_on:
+      <<: *airflow-dependencies
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: ["dag-processor"]
+    healthcheck:
+      <<: *airflow-health
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+    depends_on:
+      <<: *airflow-dependencies
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    command: ["celery", "worker"]
+    environment:
+      <<: *airflow-environment
+      DUMB_INIT_SETSID: "0"
+    healthcheck:
+      <<: *airflow-health
+      test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
+    depends_on:
+      <<: *airflow-dependencies
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: ["triggerer"]
+    healthcheck:
+      <<: *airflow-health
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+    depends_on:
+      <<: *airflow-dependencies
+      airflow-init:
+        condition: service_completed_successfully
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AIRFLOW_HEALTH_URL: http://airflow-api-server:8080/api/v2/monitor/health
+      INTERNAL_PROXY_TOKEN: ${INTERNAL_PROXY_TOKEN:?Set INTERNAL_PROXY_TOKEN}
+      TZ: UTC
+    volumes:
+      - ${PRIVATE_WORKSPACE_PATH}:/workspace/private:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-api-server:
+        condition: service_healthy
+    networks: [control, data, egress]
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    environment:
+      BACKEND_INTERNAL_URL: http://api:8000
+      INTERNAL_PROXY_TOKEN: ${INTERNAL_PROXY_TOKEN:?Set INTERNAL_PROXY_TOKEN}
+      TAILSCALE_ALLOWED_LOGINS: ${TAILSCALE_ALLOWED_LOGINS:?Set TAILSCALE_ALLOWED_LOGINS}
+      TZ: ${TZ}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const net=require('net');const s=net.connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.setTimeout(3000,()=>process.exit(1));s.on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [control, egress]
+    restart: unless-stopped
+
+networks:
+  control:
+    internal: true
+  data:
+    internal: true
+  egress: {}
+
+volumes:
+  postgres-data:
+  airflow-logs:
