@@ -1,6 +1,7 @@
+import httpx
 import pytest
 
-from job_control_api.probes import SystemProbe
+from job_control_api.probes import HttpAirflowProbe, SystemProbe
 
 
 class PassingDatabase:
@@ -23,6 +24,21 @@ class HealthyAirflow:
         }
 
 
+class DegradedAirflow:
+    async def health(self) -> dict:
+        return {
+            "metadatabase": {"status": "healthy"},
+            "scheduler": {"status": "unhealthy"},
+            "triggerer": {"status": "healthy"},
+            "dag_processor": {"status": "healthy"},
+        }
+
+
+class FailingAirflow:
+    async def health(self) -> dict:
+        raise httpx.ConnectError("airflow unavailable")
+
+
 @pytest.mark.asyncio
 async def test_collect_reports_healthy_dependencies():
     result = await SystemProbe(PassingDatabase(), HealthyAirflow()).collect()
@@ -37,3 +53,51 @@ async def test_collect_degrades_database_without_hiding_airflow():
     result = await SystemProbe(FailingDatabase(), HealthyAirflow()).collect()
     states = {item.name: item.state for item in result.services}
     assert states == {"postgres": "unavailable", "airflow": "healthy"}
+
+
+@pytest.mark.asyncio
+async def test_collect_reports_degraded_airflow_components():
+    result = await SystemProbe(PassingDatabase(), DegradedAirflow()).collect()
+    states = {item.name: item.state for item in result.services}
+    assert states == {"postgres": "healthy", "airflow": "degraded"}
+
+
+@pytest.mark.asyncio
+async def test_collect_reports_unavailable_airflow():
+    result = await SystemProbe(PassingDatabase(), FailingAirflow()).collect()
+    statuses = {item.name: item for item in result.services}
+    assert statuses["airflow"].state == "unavailable"
+    assert statuses["airflow"].detail == "ConnectError"
+
+
+@pytest.mark.asyncio
+async def test_http_airflow_probe_returns_json_response(monkeypatch):
+    async_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://airflow.test/health"
+        return httpx.Response(200, json={"scheduler": {"status": "healthy"}})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: async_client(transport=transport, **kwargs),
+    )
+
+    result = await HttpAirflowProbe("http://airflow.test/health").health()
+    assert result == {"scheduler": {"status": "healthy"}}
+
+
+@pytest.mark.asyncio
+async def test_http_airflow_probe_raises_for_http_errors(monkeypatch):
+    async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(503, request=request))
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: async_client(transport=transport, **kwargs),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await HttpAirflowProbe("http://airflow.test/health").health()
