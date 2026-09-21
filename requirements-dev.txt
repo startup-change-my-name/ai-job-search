@@ -1,2 +1,2 @@
-# Workflow lint only. Core Python tools and tests use the standard library.
+# Dependencies used by workflow linting and repository-level tests.
 PyYAML==6.0.3
