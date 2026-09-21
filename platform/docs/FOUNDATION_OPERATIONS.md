@@ -147,21 +147,157 @@ Expected after completion: `LastTaskResult = 0`, all nine services healthy throu
 
 **Deleting the PostgreSQL volume destroys both application and Airflow metadata. Never use volume deletion for ordinary stop, restart, socket repair, or routine recovery.** This foundation has no production job history yet; once it does, back up and test restoring both databases first or rotate database credentials in place.
 
-For an explicitly approved clean credential rotation: stop Serve, run `compose down` without volume removal, and back up the private environment and databases to private storage. Recreate the private environment from `platform/runtime.env.template` using fresh, independent cryptographically random values for `POSTGRES_PASSWORD`, `INTERNAL_PROXY_TOKEN`, and `AIRFLOW_JWT_SECRET`; preserve the private identity, paths, image versions, port, and database names. The internal token must match in web/API; merely changing a password environment variable does not change an existing PostgreSQL user's password.
+For an explicitly approved clean rebuild, run the following PowerShell blocks in order in the same session, continuing with `$repo`, `$startup`, `$config`, and `$tailscale` from setup. These commands retain the configured port (currently 3001), identities, paths, image versions, and every unrelated environment value. They do not shell-source the environment or display its contents. If either database has valuable state, take and test a private database backup first; the environment backup below contains credentials, not database data.
 
-Only after accepting the data loss, identify and remove the stopped project's PostgreSQL volume (leave Airflow log volume intact):
+First stop the task's automatic trigger and the services without deleting data. Do not proceed if the task is currently running. Native command failures stop the procedure explicitly:
 
-```bash
-# Deliberately separate this from everyday recovery commands. Confirm the exact name first.
-"${compose[@]}" config --volumes
-# Destructive; run only for the intentional clean rebuild described above:
-docker volume rm job-control_postgres-data
-# If using the Windows fallback, use docker.exe for that single command instead.
-chmod 600 "$env_file"
-./platform/scripts/start-stack.sh "$env_file"
+```powershell
+$ErrorActionPreference = 'Stop'
+$rotationTask = Get-ScheduledTask -TaskName JobControlPlatform
+if ($rotationTask.State -eq 'Running') { throw 'Wait for the current startup task to finish before rotation.' }
+$reenableTask = $rotationTask.State -ne 'Disabled'
+Disable-ScheduledTask -TaskName JobControlPlatform | Out-Null
+& $tailscale serve --https=443 --set-path=/ off
+if ($LASTEXITCODE -ne 0) { throw 'Could not stop the private Serve root.' }
+$runtime = (& wsl.exe --distribution $config.distro --exec wslpath -w $config.private_env_wsl_path | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runtime -PathType Leaf)) { throw 'Runtime path unavailable.' }
+$composeArgs = @('compose', '--env-file', $runtime, '-f', (Join-Path $repo 'platform\compose.yaml'))
+# Windows Compose needs the Windows form of the private bind-mount path.
+$privateLine = @(Get-Content -LiteralPath $runtime | Where-Object { $_ -match '^PRIVATE_WORKSPACE_PATH=' })
+if ($privateLine.Count -ne 1) { throw 'Expected exactly one private workspace path.' }
+$privateWsl = $privateLine[0].Substring('PRIVATE_WORKSPACE_PATH='.Length).TrimEnd("`r")
+$oldPrivateOverride = [Environment]::GetEnvironmentVariable('PRIVATE_WORKSPACE_PATH', 'Process')
+$env:PRIVATE_WORKSPACE_PATH = (& wsl.exe --distribution $config.distro --exec wslpath -w $privateWsl | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Private workspace conversion failed.' }
+& docker.exe @composeArgs down
+if ($LASTEXITCODE -ne 0) { throw 'Stack stop failed; do not rotate.' }
 ```
 
-The Compose project name is `job-control`; verify the actual volume name before deletion. Re-run the Windows launcher to restore Serve, then all isolation/authentication checks. Never print the new values, commit the private environment, or capture rendered `docker compose config` output.
+Prepare a timestamped private backup and validate all new values before replacing the environment. The parser preserves literal dotenv values, comments, ordering, and unrelated keys; it rejects duplicates and malformed entries. The three replacement secrets are independent 32-byte random hex strings, safe for the existing database URL and Compose interpolation. Empty files are secured before any secret bytes are written:
+
+```powershell
+function Read-RotationEnv([string]$text) {
+    $values = [ordered]@{}
+    foreach ($line in ($text -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^\s*#') { continue }
+        if ($line -cnotmatch '^([A-Z][A-Z0-9_]*)=(.*)$') { throw 'Malformed environment entry.' }
+        $key, $value = $Matches[1], $Matches[2]
+        if ($values.Contains($key)) { throw 'Duplicate environment key.' }
+        if ([string]::IsNullOrWhiteSpace($value) -or $value -in @('""', "''")) { throw 'Empty environment value.' }
+        $values[$key] = $value
+    }
+    return ,$values
+}
+$ownerSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$systemSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+function Protect-RotationFile([string]$path) {
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner($ownerSid)
+    foreach ($sid in @($ownerSid, $systemSid)) {
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $path -AclObject $acl
+    $wslPath = (& wsl.exe --distribution $config.distro --exec wslpath -u $path | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Permission path conversion failed.' }
+    & wsl.exe --distribution $config.distro --exec chmod 600 $wslPath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not set private mode.' }
+    $mode = (& wsl.exe --distribution $config.distro --exec stat -c '%a' $wslPath | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $mode -ne '600') { throw 'WSL metadata/mode 600 required.' }
+    $actual = Get-Acl -LiteralPath $path
+    $sids = @($actual.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value })
+    if (-not $actual.AreAccessRulesProtected -or $actual.Access.Count -ne 2 -or
+        $ownerSid.Value -notin $sids -or 'S-1-5-18' -notin $sids -or
+        $actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $ownerSid.Value) {
+        throw 'Private owner/SYSTEM ACL validation failed.'
+    }
+}
+Protect-RotationFile $runtime
+$oldBytes = [System.IO.File]::ReadAllBytes($runtime)
+$original = [System.IO.File]::ReadAllText($runtime)
+$oldValues = Read-RotationEnv $original
+$required = Read-RotationEnv ([System.IO.File]::ReadAllText((Join-Path $repo 'platform\runtime.env.template')))
+foreach ($key in $required.Keys) {
+    if (-not $oldValues.Contains($key)) { throw 'Required runtime key missing.' }
+}
+$rotatedKeys = @('POSTGRES_PASSWORD', 'INTERNAL_PROXY_TOKEN', 'AIRFLOW_JWT_SECRET')
+$newSecrets = @{}
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    foreach ($key in $rotatedKeys) {
+        do {
+            $bytes = New-Object byte[] 32
+            $rng.GetBytes($bytes)
+            $value = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+        } while ($value -in @($oldValues.Values) -or $value -in @($newSecrets.Values))
+        $newSecrets[$key] = $value
+    }
+} finally { $rng.Dispose() }
+$replacement = [regex]::Replace($original,
+    '(?m)^(POSTGRES_PASSWORD|INTERNAL_PROXY_TOKEN|AIRFLOW_JWT_SECRET)=[^\r\n]*',
+    [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $match.Groups[1].Value + '=' + $newSecrets[$match.Groups[1].Value] })
+$newValues = Read-RotationEnv $replacement
+if ($newValues.Count -ne $oldValues.Count) { throw 'Environment key count changed.' }
+foreach ($key in $oldValues.Keys) {
+    if (-not $newValues.Contains($key)) { throw 'Environment key lost.' }
+    if ($key -in $rotatedKeys) {
+        if ($newValues[$key] -cnotmatch '^[a-f0-9]{64}$' -or $newValues[$key] -eq $oldValues[$key]) { throw 'New secret validation failed.' }
+    } elseif ($newValues[$key] -cne $oldValues[$key]) { throw 'Unrelated value changed.' }
+}
+if (@($rotatedKeys | ForEach-Object { $newValues[$_] } | Select-Object -Unique).Count -ne 3) { throw 'Secrets must be independent.' }
+$stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ')
+$backup = $runtime + '.backup-' + $stamp
+$temp = $runtime + '.rotate-' + [Guid]::NewGuid().ToString('N') + '.tmp'
+# CreateNew prevents accidental overwrite; files are empty until ACL/mode checks pass.
+foreach ($path in @($backup, $temp)) {
+    $handle = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew)
+    $handle.Dispose()
+    Protect-RotationFile $path
+}
+[System.IO.File]::WriteAllBytes($backup, $oldBytes)
+[System.IO.File]::WriteAllText($temp, $replacement, (New-Object System.Text.UTF8Encoding($false)))
+if ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($backup)) -cne [Convert]::ToBase64String($oldBytes)) { throw 'Backup verification failed.' }
+if ([System.IO.File]::ReadAllText($temp) -cne $replacement) { throw 'Temporary file verification failed.' }
+# Quiet validation only: never render the substituted Compose configuration.
+& docker.exe compose --env-file $temp -f (Join-Path $repo 'platform\compose.yaml') config --quiet
+if ($LASTEXITCODE -ne 0) { throw 'Compose rejected the new environment; original remains intact.' }
+Protect-RotationFile $backup
+Protect-RotationFile $temp
+# Atomic replacement on the same NTFS directory; the separate backup is retained privately.
+[System.IO.File]::Replace($temp, $runtime, $null)
+Protect-RotationFile $runtime
+if ([System.IO.File]::ReadAllText($runtime) -cne $replacement) { throw 'Final environment verification failed.' }
+Write-Host 'Private backup and validated credential replacement complete; database volume is still intact.'
+```
+
+If preparation fails, leave the task disabled and services stopped, inspect the failure without printing environment contents, and restore the secured backup before starting with the old database. Changing `POSTGRES_PASSWORD` in the environment does not change an existing database user's password. The three rotated keys now coexist only in the private file and local process memory.
+
+**Destructive boundary:** the following block destroys both databases. Run it only after explicitly choosing the clean rebuild and accepting that loss. It verifies the exact stopped project's volume labels before removing **only** `job-control_postgres-data`; the Airflow log volume stays intact. The typed confirmation prevents accidental execution when copying the whole runbook:
+
+```powershell
+$volume = 'job-control_postgres-data'
+$volumeInfo = (& docker.exe volume inspect $volume | Out-String) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or @($volumeInfo).Count -ne 1 -or
+    $volumeInfo[0].Name -ne $volume -or
+    $volumeInfo[0].Labels.'com.docker.compose.project' -ne 'job-control' -or
+    $volumeInfo[0].Labels.'com.docker.compose.volume' -ne 'postgres-data') { throw 'Unexpected PostgreSQL volume; preserved.' }
+$users = @(& docker.exe ps -aq --filter "volume=$volume")
+if ($LASTEXITCODE -ne 0 -or $users.Count -ne 0) { throw 'Volume still has a container; preserved.' }
+if ((Read-Host 'Type DELETE job-control_postgres-data to destroy both databases') -cne 'DELETE job-control_postgres-data') { throw 'Deletion cancelled; restore old environment before restarting the old database.' }
+& docker.exe volume rm $volume
+if ($LASTEXITCODE -ne 0) { throw 'Volume removal failed; do not continue.' }
+# Restore the caller's process environment before the WSL launcher handles its own paths.
+[Environment]::SetEnvironmentVariable('PRIVATE_WORKSPACE_PATH', $oldPrivateOverride, 'Process')
+& "$repo\platform\windows\Start-JobControl.ps1" -StartupConfig $startup
+& wsl.exe --distribution $config.distro --exec bash ($config.repo_wsl_path + '/platform/scripts/verify-stack.sh') $config.private_env_wsl_path
+if ($LASTEXITCODE -ne 0) { throw 'Restart verification failed; leave the scheduled task disabled.' }
+if ($reenableTask) { Enable-ScheduledTask -TaskName JobControlPlatform | Out-Null }
+Remove-Variable original,replacement,oldBytes,oldValues,newValues,newSecrets,value,bytes -ErrorAction SilentlyContinue
+Write-Host 'Clean credential rebuild verified. Repeat browser, isolation, and private Serve checks.'
+```
+
+Keep the timestamped backup private; it contains the previous secrets. Repeat all browser/isolation checks above, including the real phone check. Never commit either environment file or share raw Compose configuration. If stopping partway through, restore the process `PRIVATE_WORKSPACE_PATH` override and keep the automatic task disabled until the environment and database credentials agree.
 
 ## Diagnostics and regression checks
 
