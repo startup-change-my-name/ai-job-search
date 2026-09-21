@@ -28,6 +28,19 @@ class NeverCompletingDatabase:
             self.cancelled = True
 
 
+class SlowCancellationDatabase:
+    def __init__(self) -> None:
+        self.cancellation_started = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+
+    async def ping(self) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancellation_started.set()
+            await self.release_cleanup.wait()
+
+
 class HealthyAirflow:
     async def health(self) -> dict:
         return {
@@ -88,6 +101,35 @@ async def test_collect_times_out_database_without_hiding_healthy_airflow(monkeyp
         ("airflow", "healthy", None),
     ]
     assert database.cancelled
+
+
+@pytest.mark.asyncio
+async def test_collect_deadline_does_not_wait_for_database_cancellation_cleanup(
+    monkeypatch,
+):
+    database = SlowCancellationDatabase()
+    probe = SystemProbe(database, HealthyAirflow())
+    monkeypatch.setattr(probes, "DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01)
+
+    try:
+        result = await asyncio.wait_for(probe.collect(), timeout=0.2)
+
+        assert [
+            (item.name, item.state, item.detail)
+            for item in result.services
+        ] == [
+            ("postgres", "unavailable", "TimeoutError"),
+            ("airflow", "healthy", None),
+        ]
+        assert database.cancellation_started.is_set()
+        cleanup_tasks = tuple(probe._cleanup_tasks)
+        assert len(cleanup_tasks) == 1
+    finally:
+        database.release_cleanup.set()
+
+    await asyncio.wait_for(asyncio.gather(*cleanup_tasks), timeout=0.2)
+    await asyncio.sleep(0)
+    assert not probe._cleanup_tasks
 
 
 @pytest.mark.asyncio

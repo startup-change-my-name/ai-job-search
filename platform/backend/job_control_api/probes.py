@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Coroutine
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol, TypeVar
 
 import httpx
 from sqlalchemy import text
@@ -11,6 +12,10 @@ from .models import ServiceStatus, SystemStatus
 
 # Leave response-processing headroom inside verify-stack.sh's three-second request limit.
 DEPENDENCY_PROBE_TIMEOUT_SECONDS = 2.0
+# Bound retained tasks if a dependency repeatedly delays cancellation cleanup.
+_MAX_TRACKED_CLEANUP_TASKS = 32
+
+_ProbeResult = TypeVar("_ProbeResult")
 
 
 class DatabaseProbe(Protocol):
@@ -45,13 +50,42 @@ class SystemProbe:
     def __init__(self, database: DatabaseProbe, airflow: AirflowProbe):
         self.database = database
         self.airflow = airflow
+        self._cleanup_tasks: set[asyncio.Task[Any]] = set()
+
+    def _consume_cleanup_result(self, task: asyncio.Task[Any]) -> None:
+        self._cleanup_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _run_with_deadline(
+        self,
+        operation: Coroutine[Any, Any, _ProbeResult],
+    ) -> _ProbeResult:
+        if len(self._cleanup_tasks) >= _MAX_TRACKED_CLEANUP_TASKS:
+            operation.close()
+            raise TimeoutError
+
+        task = asyncio.create_task(operation)
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._consume_cleanup_result)
+        try:
+            done, _ = await asyncio.wait(
+                (task,),
+                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+            )
+        except BaseException:
+            task.cancel()
+            raise
+
+        if task in done:
+            return task.result()
+
+        task.cancel()
+        raise TimeoutError
 
     async def _database_status(self, checked_at: datetime) -> ServiceStatus:
         try:
-            await asyncio.wait_for(
-                self.database.ping(),
-                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-            )
+            await self._run_with_deadline(self.database.ping())
             return ServiceStatus(name="postgres", state="healthy", checked_at=checked_at)
         except Exception as exc:
             return ServiceStatus(
@@ -63,10 +97,7 @@ class SystemProbe:
 
     async def _airflow_status(self, checked_at: datetime) -> ServiceStatus:
         try:
-            payload = await asyncio.wait_for(
-                self.airflow.health(),
-                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-            )
+            payload = await self._run_with_deadline(self.airflow.health())
             states = [
                 payload.get(name, {}).get("status")
                 for name in ("metadatabase", "scheduler", "triggerer", "dag_processor")
