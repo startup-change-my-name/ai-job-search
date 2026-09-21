@@ -1,28 +1,205 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --font-geist-sans: Arial, Helvetica, sans-serif;
-  --font-geist-mono: "Courier New", monospace;
+  --bg: #070b14;
+  --panel: #101827;
+  --panel-2: #151f31;
+  --line: #25334a;
+  --text: #f4f7fb;
+  --muted: #91a0b8;
+  --cyan: #5ee7f2;
+  --green: #5ee6a8;
+  --amber: #ffc86b;
+  --red: #ff7a8a;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--bg);
+  color: var(--text);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  margin: 0;
   font-family: Arial, Helvetica, sans-serif;
+  background: radial-gradient(circle at 75% 0%, #14233e 0, var(--bg) 38%);
+}
+
+a {
+  color: inherit;
+}
+
+.cockpit {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0 110px;
+}
+
+.cockpit__header,
+.panel__heading,
+.service-card__topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+}
+
+h1 {
+  margin: 4px 0 8px;
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  letter-spacing: -0.055em;
+}
+
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+.eyebrow {
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.lede,
+.service-card p,
+.service-card time,
+.panel__heading time {
+  color: var(--muted);
+}
+
+.live-badge,
+.status-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 12px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.live-badge span {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--green);
+  box-shadow: 0 0 16px var(--green);
+}
+
+.queue-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 34px 0;
+}
+
+.queue-card,
+.service-card,
+.panel {
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border-radius: 18px;
+}
+
+.queue-card {
+  padding: 18px;
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.queue-card strong {
+  font-size: 2.3rem;
+}
+
+.queue-card span {
+  color: var(--muted);
+}
+
+.panel {
+  padding: 24px;
+}
+
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.service-card {
+  padding: 18px;
+}
+
+.service-card[data-state="healthy"] .status-pill {
+  color: var(--green);
+}
+
+.service-card[data-state="degraded"] .status-pill {
+  color: var(--amber);
+}
+
+.service-card[data-state="unavailable"] .status-pill {
+  color: var(--red);
+}
+
+.mobile-actions {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .cockpit {
+    width: min(100% - 22px, 540px);
+    padding-top: 24px;
+  }
+
+  .cockpit__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .queue-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .service-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel {
+    padding: 18px;
+  }
+
+  .panel__heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mobile-actions {
+    position: fixed;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 10;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0b1220f2;
+    backdrop-filter: blur(16px);
+  }
+
+  .mobile-actions a {
+    min-height: 52px;
+    display: grid;
+    place-items: center;
+    text-decoration: none;
+    font-weight: 700;
+  }
 }
