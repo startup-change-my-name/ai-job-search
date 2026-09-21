@@ -17,6 +17,22 @@ compose_file="$repo_root/platform/compose.yaml"
 if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
   compose=(docker compose --env-file "$env_file" -f "$compose_file")
 elif command -v docker.exe >/dev/null 2>&1 && docker.exe version >/dev/null 2>&1; then
+  private_workspace_path=""
+  while IFS='=' read -r key value; do
+    key="${key%$'\r'}"
+    value="${value%$'\r'}"
+    if [[ "$key" == "PRIVATE_WORKSPACE_PATH" ]]; then
+      private_workspace_path="$value"
+    fi
+  done < "$env_file"
+  if [[ "$private_workspace_path" != /* || ! -d "$private_workspace_path" ]]; then
+    echo "PRIVATE_WORKSPACE_PATH is missing or invalid in private runtime environment" >&2
+    exit 78
+  fi
+  export PRIVATE_WORKSPACE_PATH="$(wslpath -w "$private_workspace_path")"
+  if [[ ! ":${WSLENV-}:" =~ :PRIVATE_WORKSPACE_PATH(/[^:]*)?: ]]; then
+    export WSLENV="${WSLENV:+$WSLENV:}PRIVATE_WORKSPACE_PATH"
+  fi
   compose=(
     docker.exe compose
     --env-file "$(wslpath -w "$env_file")"
@@ -66,11 +82,41 @@ stack_containers_are_healthy() {
   [[ "$valid" -eq 1 && "${#seen[@]}" -eq "${#expected_services[@]}" ]]
 }
 
+dependencies_are_healthy() {
+  local payload
+  if ! payload="$("${compose[@]}" exec -T api python -c \
+    "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3).read().decode('utf-8'))")"; then
+    return 1
+  fi
+
+  python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+    services = payload["services"]
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+if not isinstance(services, list):
+    raise SystemExit(1)
+
+for required_name in ("postgres", "airflow"):
+    matches = [
+        service
+        for service in services
+        if isinstance(service, dict) and service.get("name") == required_name
+    ]
+    if len(matches) != 1 or matches[0].get("state") != "healthy":
+        raise SystemExit(1)
+' <<< "$payload" 2>/dev/null
+}
+
 for _attempt in $(seq 1 40); do
   rows="$("${compose[@]}" ps --format '{{.Service}}|{{.State}}|{{.Health}}')"
   if stack_containers_are_healthy "$rows" \
-    && "${compose[@]}" exec -T api python -c \
-      "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"; then
+    && dependencies_are_healthy; then
     echo "job-control stack healthy"
     exit 0
   fi
