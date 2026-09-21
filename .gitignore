@@ -120,3 +120,11 @@ company_research/*.json
 
 # Isolated feature worktrees managed by Superpowers
 .worktrees/
+
+# Job-control runtime state; reusable definitions stay tracked.
+platform/runtime/
+platform/**/logs/
+platform/**/.pytest_cache/
+platform/frontend/.next/
+platform/frontend/playwright-report/
+platform/frontend/test-results/
