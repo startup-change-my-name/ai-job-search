@@ -117,3 +117,6 @@ company_research/*.json
 
 # Brainstorm mockups (superpowers visual companion) - never ship
 .superpowers/
+
+# Isolated feature worktrees managed by Superpowers
+.worktrees/
