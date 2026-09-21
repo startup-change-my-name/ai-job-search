@@ -1,6 +1,9 @@
+import asyncio
+
 import httpx
 import pytest
 
+from job_control_api import probes
 from job_control_api.probes import HttpAirflowProbe, SystemProbe
 
 
@@ -12,6 +15,17 @@ class PassingDatabase:
 class FailingDatabase:
     async def ping(self) -> None:
         raise ConnectionError("database refused connection")
+
+
+class NeverCompletingDatabase:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def ping(self) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cancelled = True
 
 
 class HealthyAirflow:
@@ -53,6 +67,27 @@ async def test_collect_degrades_database_without_hiding_airflow():
     result = await SystemProbe(FailingDatabase(), HealthyAirflow()).collect()
     states = {item.name: item.state for item in result.services}
     assert states == {"postgres": "unavailable", "airflow": "healthy"}
+
+
+@pytest.mark.asyncio
+async def test_collect_times_out_database_without_hiding_healthy_airflow(monkeypatch):
+    database = NeverCompletingDatabase()
+    assert 0 < probes.DEPENDENCY_PROBE_TIMEOUT_SECONDS < 3.0
+    monkeypatch.setattr(probes, "DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01, raising=False)
+
+    result = await asyncio.wait_for(
+        SystemProbe(database, HealthyAirflow()).collect(),
+        timeout=0.2,
+    )
+
+    assert [
+        (item.name, item.state, item.detail)
+        for item in result.services
+    ] == [
+        ("postgres", "unavailable", "TimeoutError"),
+        ("airflow", "healthy", None),
+    ]
+    assert database.cancelled
 
 
 @pytest.mark.asyncio

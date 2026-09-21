@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -6,6 +7,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from .models import ServiceStatus, SystemStatus
+
+
+# Leave response-processing headroom inside verify-stack.sh's three-second request limit.
+DEPENDENCY_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 class DatabaseProbe(Protocol):
@@ -41,39 +46,48 @@ class SystemProbe:
         self.database = database
         self.airflow = airflow
 
-    async def collect(self) -> SystemStatus:
-        now = datetime.now(timezone.utc)
-        services: list[ServiceStatus] = []
+    async def _database_status(self, checked_at: datetime) -> ServiceStatus:
         try:
-            await self.database.ping()
-            services.append(ServiceStatus(name="postgres", state="healthy", checked_at=now))
-        except Exception as exc:
-            services.append(
-                ServiceStatus(
-                    name="postgres",
-                    state="unavailable",
-                    checked_at=now,
-                    detail=type(exc).__name__,
-                )
+            await asyncio.wait_for(
+                self.database.ping(),
+                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
             )
+            return ServiceStatus(name="postgres", state="healthy", checked_at=checked_at)
+        except Exception as exc:
+            return ServiceStatus(
+                name="postgres",
+                state="unavailable",
+                checked_at=checked_at,
+                detail=type(exc).__name__,
+            )
+
+    async def _airflow_status(self, checked_at: datetime) -> ServiceStatus:
         try:
-            payload = await self.airflow.health()
+            payload = await asyncio.wait_for(
+                self.airflow.health(),
+                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+            )
             states = [
                 payload.get(name, {}).get("status")
                 for name in ("metadatabase", "scheduler", "triggerer", "dag_processor")
             ]
             state = "healthy" if all(value == "healthy" for value in states) else "degraded"
-            services.append(ServiceStatus(name="airflow", state=state, checked_at=now))
+            return ServiceStatus(name="airflow", state=state, checked_at=checked_at)
         except Exception as exc:
-            services.append(
-                ServiceStatus(
-                    name="airflow",
-                    state="unavailable",
-                    checked_at=now,
-                    detail=type(exc).__name__,
-                )
+            return ServiceStatus(
+                name="airflow",
+                state="unavailable",
+                checked_at=checked_at,
+                detail=type(exc).__name__,
             )
-        return SystemStatus(generated_at=now, services=services)
+
+    async def collect(self) -> SystemStatus:
+        now = datetime.now(timezone.utc)
+        postgres, airflow = await asyncio.gather(
+            self._database_status(now),
+            self._airflow_status(now),
+        )
+        return SystemStatus(generated_at=now, services=[postgres, airflow])
 
 
 def build_system_probe(database_url: str, airflow_health_url: str) -> SystemProbe:
