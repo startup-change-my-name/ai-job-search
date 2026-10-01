@@ -7,7 +7,10 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 
-def classify(job, floor=4500):
+DEFAULT_FLOOR_MONTHLY_USD = 5000
+
+
+def classify(job, floor=DEFAULT_FLOOR_MONTHLY_USD):
     if not isinstance(job, dict):
         raise ValueError('posting facts must be an object')
     if type(floor) not in (int, float) or not math.isfinite(floor) or floor < 0:
@@ -82,9 +85,13 @@ def classify(job, floor=4500):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('file', type=Path)
+    parser.add_argument('--floor-monthly-usd', type=float,
+                        default=DEFAULT_FLOOR_MONTHLY_USD,
+                        help='Minimum gross monthly USD base salary (default: %(default)s)')
     args = parser.parse_args()
     try:
-        print(json.dumps(classify(json.loads(args.file.read_text(encoding='utf-8'))), indent=2))
+        job = json.loads(args.file.read_text(encoding='utf-8'))
+        print(json.dumps(classify(job, floor=args.floor_monthly_usd), indent=2))
     except (ValueError, TypeError, OSError) as exc:
         parser.exit(1, f'Invalid posting facts: {exc}\n')
 

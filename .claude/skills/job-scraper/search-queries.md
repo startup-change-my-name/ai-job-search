@@ -1,5 +1,5 @@
 ---
-framework_version: 1.1.0
+framework_version: 1.2.0
 ---
 
 # Remote AI / Data search queries
@@ -28,6 +28,16 @@ Use Python, SQL, pipelines, Airflow and cloud data as query variants.
 Combine data scientist / machine learning / data engineer with automotive,
 telematics, fleet, mobility, battery, EV, predictive maintenance or industrial.
 Keep the same Brazil-remote and USD gates. Do not silently broaden to relocation.
+
+## Separate EUR and relocation passes
+
+Include EUR-paid remote roles in a separately labeled review list; keep Brazil/LATAM
+eligibility checks and follow the additional currency track in the market policy.
+For relocation explicitly authorized in the private profile, run separate country
+queries (Europe, Japan or New Zealand as configured) with sponsorship terms. Record
+the posting's actual location, currency and visa evidence; a search term is not proof.
+Do not mix these rows into the confirmed Brazil/USD list or infer net pay or dependent
+rights. Keep unknown compensation and sponsorship visible for user review.
 
 ## Enabled CLI source
 

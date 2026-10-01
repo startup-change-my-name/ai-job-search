@@ -1,12 +1,12 @@
 # Remote Brazil / USD edition
 
 This fork uses the upstream Claude Code workflow, with Brazil/LATAM remote eligibility,
-USD 4,500/month base screening and AI/DS/DE role-specific tailoring. Industry preference:
+USD 5,000/month base screening and AI/DS/DE role-specific tailoring. Industry preference:
 automotive, mobility, batteries and industrial data; other relevant industries remain in scope.
 
 ## Windows desktop setup
 
-From a clone of juniortlr/ai-job-search, with Python 3.10+, run:
+From a clone of startup-change-my-name/ai-job-search, with Python 3.10+, run:
 
 ```powershell
 python tools/create_private_workspace.py
@@ -75,6 +75,11 @@ Live source availability can change; source errors are reported separately.
 Unknown salary/currency/Brazil eligibility belongs in a separate clarification list.
 Sourced estimates are labeled; USD display is not proof of payment currency. Annual
 base is compared over 12 months; hourly estimates require supplied paid hours/month.
+
+`python tools/remote_gate.py reports/<job>-eligibility.json` uses USD 5,000/month.
+Use `--floor-monthly-usd AMOUNT` only for an explicitly chosen alternative. EUR pay
+and authorized relocation roles use the separate review tracks in the market policy;
+the USD helper does not calculate exchange rates, taxes or immigration eligibility.
 
 ## Updating
 
