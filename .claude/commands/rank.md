@@ -50,6 +50,12 @@ State how many jobs will be ranked and how many are deferred before proceeding.
 
 ## Step 2: Batch-Fetch and Score
 
+Optional Jev shadow comparison: see `docs/JEV_TRIAGE.md` and
+`tools/jev_triage.py`. Keep disabled unless explicitly configured. Its advisory
+output must not override the remote-market gates, original scores, tracker,
+or application confirmations. No live API call without approved data scope
+and budget; use synthetic response fixtures for offline tests.
+
 Dispatch parallel `general-purpose` agents via the **Agent tool**, ~5 jobs per agent (a single agent is fine for ≤5 jobs). Token-efficiency rules, consistent with `/apply`:
 
 - Pass each agent everything it needs **inline in the prompt** - the job list (title, company, URL) and a compact scoring rubric extracted from the files you read in Step 1: the strong/moderate/weak skill match areas, direct/adjacent experience domains, behavioral thrive/drain factors, career goals, deal-breakers, and the location constraints. Do **not** make agents re-read the profile files.

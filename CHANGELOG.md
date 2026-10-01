@@ -15,6 +15,12 @@ per-file diff commands.
 
 ### Added
 
+- **Optional Jev shadow triage** - a disabled-by-default adapter with offline
+  fixtures, bounded UTF-8 requests, conservative probability checks and sanitized
+  errors. FAIL gates skip transport; FLAG gates cannot be promoted. It never
+  writes ranking/application state. Live access requires separate data and budget
+  approval plus explicit runtime opt-in; no live evaluation has been performed.
+
 - **`/expand` project and portfolio expansion** (`.claude/commands/expand.md`,
   `tests/test_expand_command.py`) - expands candidate discovery
   to technical projects from public GitHub repositories, extracting structured summaries
