@@ -10,7 +10,7 @@
   <a href="https://trendshift.io/repositories/43622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-43622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/43622/daily" alt="MadsLorentzen%2Fai-job-search | Trendshift" width="250" height="55"/></a>
 </p>
 
-[![Fork CI](https://github.com/juniortlr/ai-job-search/actions/workflows/ci.yml/badge.svg)](https://github.com/juniortlr/ai-job-search/actions/workflows/ci.yml)
+[![Fork CI](https://github.com/startup-change-my-name/ai-job-search/actions/workflows/ci.yml/badge.svg)](https://github.com/startup-change-my-name/ai-job-search/actions/workflows/ci.yml)
 
 An AI-powered job application framework built on [Claude Code](https://claude.com/claude-code). Fork it, fill in your profile, and let Claude evaluate job postings, tailor your CV, write cover letters, and prepare you for interviews.
 
@@ -21,7 +21,9 @@ An AI-powered job application framework built on [Claude Code](https://claude.co
 ## Remote Brazil / USD edition
 
 This fork targets remote AI Engineering, Data Science and Data Engineering roles
-available from Brazil, with a USD 4,500/month base target and optional automotive focus.
+available from Brazil, with a configurable USD 5,000/month base target and optional automotive focus.
+EUR-paid remote roles and authorized relocation searches have separate evidence-based
+review tracks; see the market policy for their limits.
 **Start with [the desktop setup guide](docs/REMOTE_SETUP.md)** before upstream setup:
 it creates a separate private local workspace for resumes, LinkedIn and references.
 See [market policy](.claude/skills/job-application-assistant/10-remote-brazil.md).

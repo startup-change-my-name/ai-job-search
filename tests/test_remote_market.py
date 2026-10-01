@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from tools.remote_gate import classify
@@ -12,12 +13,37 @@ class RemoteMarketTests(unittest.TestCase):
     def job(self):
         return {'remote': True, 'brazil_eligible': True, 'paid_in_usd': True,
                 'overlap_compatible': True, 'contract_compatible': True,
-                'salary': {'min': 54000, 'max': 72000, 'currency': 'USD', 'period': 'year', 'kind': 'listed'},
+                'salary': {'min': 60000, 'max': 72000, 'currency': 'USD', 'period': 'year', 'kind': 'listed'},
                 'evidence': {k:'explicit posting evidence' for k in ['remote','brazil_eligible','paid_in_usd','salary','overlap_compatible','contract_compatible']},
                 'source_url':'https://example.com/job', 'checked_date':'2026-01-01'}
     def test_confirmed_annual_pay(self):
         result=classify(self.job()); self.assertEqual(result['verdict'],'PASS')
-        self.assertEqual(result['monthly_usd_range'],[4500,6000])
+        self.assertEqual(result['monthly_usd_range'],[5000,6000])
+        self.assertEqual(result['floor_monthly_usd'],5000)
+    def test_default_floor_boundaries(self):
+        for lower, upper, verdict in ((4999, 4999, 'FAIL'),
+                                      (4500, 6000, 'FLAG'),
+                                      (4999, 5000, 'FLAG'),
+                                      (5000, 5000, 'PASS'),
+                                      (5000, 6000, 'PASS')):
+            with self.subTest(lower=lower, upper=upper):
+                job = self.job()
+                job['salary'].update(min=lower, max=upper, period='month')
+                result = classify(job)
+                self.assertEqual(result['verdict'], verdict)
+                self.assertEqual(result['floor_monthly_usd'], 5000)
+                if verdict == 'FAIL':
+                    self.assertIn('salary maximum below floor', result['failures'])
+                elif verdict == 'FLAG':
+                    self.assertIn('salary range overlaps floor', result['clarifications'])
+    def test_custom_floor_preserves_explicit_policy(self):
+        job = self.job()
+        job['salary']['min'] = 54000
+        self.assertEqual(classify(job)['verdict'], 'FLAG')
+        result = classify(job, floor=4500)
+        self.assertEqual(result['verdict'], 'PASS')
+        self.assertEqual(result['floor_monthly_usd'], 4500)
+        self.assertEqual(classify(job, 6500)['verdict'], 'FAIL')
     def test_us_remote_is_not_brazil(self):
         j=self.job();j['brazil_eligible']=False
         self.assertEqual(classify(j)['verdict'],'FAIL')
@@ -33,9 +59,18 @@ class RemoteMarketTests(unittest.TestCase):
         self.assertEqual(classify(j)['verdict'],'FLAG')
     def test_hourly_needs_hours(self):
         j=self.job();j['salary'].update(min=40,max=50,period='hour')
-        self.assertEqual(classify(j)['verdict'],'FLAG')
+        for invalid in (None, True, 0, -1, '125', float('nan'), float('inf')):
+            with self.subTest(hours=invalid):
+                j['salary']['paid_hours_per_month'] = invalid
+                result = classify(j)
+                self.assertEqual(result['verdict'], 'FLAG')
+                self.assertIsNone(result['monthly_usd_range'])
+                self.assertIn('hourly rate needs explicit paid hours per month', result['clarifications'])
         j['salary']['paid_hours_per_month']=120
+        self.assertEqual(classify(j)['verdict'],'FLAG')
+        j['salary']['paid_hours_per_month']=125
         self.assertEqual(classify(j)['verdict'],'PASS')
+        self.assertEqual(classify(j)['monthly_usd_range'], [5000,6250])
     def test_invalid_pay_and_booleans(self):
         j=self.job();j['salary']['min']=float('nan')
         with self.assertRaises(ValueError):classify(j)
@@ -67,11 +102,43 @@ class RemoteMarketTests(unittest.TestCase):
         for invalid in (None, [], 'posting', True, 42):
             with self.subTest(job=invalid), self.assertRaises(ValueError):
                 classify(invalid)
-        for invalid in (None, True, '4500', -1, float('nan'), float('inf'), -float('inf')):
+        for invalid in (None, True, '5000', -1, float('nan'), float('inf'), -float('inf')):
             with self.subTest(floor=invalid), self.assertRaises(ValueError):
                 classify(self.job(), invalid)
-        self.assertEqual(classify(self.job(), 5000)['verdict'], 'FLAG')
+        self.assertEqual(classify(self.job(), 5500)['verdict'], 'FLAG')
         self.assertEqual(classify(self.job(), 0)['verdict'], 'PASS')
+
+    def test_cli_floor_default_and_override(self):
+        script = Path(__file__).resolve().parents[1] / 'tools' / 'remote_gate.py'
+        with tempfile.TemporaryDirectory() as temp:
+            job = self.job()
+            job['salary']['min'] = 54000
+            source = Path(temp) / 'job.json'
+            source.write_text(json.dumps(job), encoding='utf-8')
+            for options, floor, verdict in (([], 5000, 'FLAG'),
+                                             (['--floor-monthly-usd', '4500'], 4500, 'PASS'),
+                                             (['--floor-monthly-usd', '6500'], 6500, 'FAIL')):
+                with self.subTest(options=options):
+                    run = subprocess.run([sys.executable, str(script), str(source), *options],
+                                         capture_output=True, text=True, check=True)
+                    result = json.loads(run.stdout)
+                    self.assertEqual(result['floor_monthly_usd'], floor)
+                    self.assertEqual(result['verdict'], verdict)
+
+    def test_cli_rejects_invalid_floor(self):
+        script = Path(__file__).resolve().parents[1] / 'tools' / 'remote_gate.py'
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'job.json'
+            source.write_text(json.dumps(self.job()), encoding='utf-8')
+            for invalid in ('-1', 'nan', 'inf', '-inf', 'not-a-number'):
+                with self.subTest(floor=invalid):
+                    run = subprocess.run([sys.executable, str(script), str(source),
+                                          '--floor-monthly-usd=' + invalid],
+                                         capture_output=True, text=True)
+                    self.assertNotEqual(run.returncode, 0)
+                    self.assertEqual(run.stdout, '')
+                    self.assertIn('floor', run.stderr)
+                    self.assertNotIn('Traceback', run.stderr)
 
     def test_malformed_source_urls_are_flagged(self):
         for invalid in (None, [], '', 'http://example.com/job', 'https://',

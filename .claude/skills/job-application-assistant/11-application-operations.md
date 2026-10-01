@@ -1,3 +1,7 @@
+---
+framework_version: 1.0.0
+---
+
 # Application operations and session recovery
 
 Read alongside `10-remote-brazil.md` when resuming a search, handling a batch, or

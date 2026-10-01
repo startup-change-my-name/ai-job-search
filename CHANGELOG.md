@@ -15,6 +15,12 @@ per-file diff commands.
 
 ### Added
 
+- **Optional Jev shadow triage** - a disabled-by-default adapter with offline
+  fixtures, bounded UTF-8 requests, conservative probability checks and sanitized
+  errors. FAIL gates skip transport; FLAG gates cannot be promoted. It never
+  writes ranking/application state. Live access requires separate data and budget
+  approval plus explicit runtime opt-in; no live evaluation has been performed.
+
 - **`/expand` project and portfolio expansion** (`.claude/commands/expand.md`,
   `tests/test_expand_command.py`) - expands candidate discovery
   to technical projects from public GitHub repositories, extracting structured summaries
@@ -46,6 +52,22 @@ per-file diff commands.
   LaTeX toolchain.
 
 ### Fixed
+
+- **Remote-search core on Windows** - port selected upstream fixes for BOM-aware
+  tracker CSVs (#485), Unicode tracker identity (#486), stable non-Latin job keys
+  (#487, #502), validated score dimensions (#488), UTF-8 CLI output (#490), and
+  conservative UTF-8/BOM/undecodable-rule handling in `robots.txt` (#506, #509).
+  Preserve this fork's profile stamps and shortlist behavior. Existing saved keys
+  are not rewritten; audit private state and compare URLs before storing new leads.
+- **Salary evidence and screening** - default to USD 5,000/month with an explicit
+  `--floor-monthly-usd` override. Keep EUR and authorized relocation reviews separate
+  from the USD helper. Port Freehire salary periods (#504), decoded titles (#505),
+  and the salary-workbook Count/Index pairing fix (#470).
+- **Fork validation** - port upstream's fork-aware setup fixture guard (#463), add
+  the missing version markers to fork policy files, and point the CI badge/setup
+  guide at the canonical organization fork.
+- **Shortlist CLI contract** - accept the documented `--json` flag and make
+  `--top 0` return the full ranked queue as advertised, without modifying state.
 
 - **`jobindex-search detail` no longer fetches arbitrary URLs or invents posting-shaped
   output** (#447) - the command fetched any `http(s)` input verbatim (no host check) and,

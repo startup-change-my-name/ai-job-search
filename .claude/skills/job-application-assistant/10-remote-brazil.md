@@ -1,3 +1,7 @@
+---
+framework_version: 1.0.0
+---
+
 # Remote Brazil / USD search policy
 
 This is the canonical market policy for this fork. Read before /setup, /scrape,
@@ -11,7 +15,7 @@ change these defaults; never silently relax them to fill a results quota.
 - Mid-level and senior individual-contributor roles. Judge responsibilities, not
   the candidate's current job title. Staff/lead is a stretch, never inferred tenure.
 - Fully remote while living in Brazil; Brazil, LATAM, or explicitly worldwide hiring.
-- USD payment and at least USD 4,500 gross base per month (USD 54,000/year over 12 months).
+- USD payment and at least USD 5,000 gross base per month (USD 60,000/year over 12 months).
   These are search thresholds, not an instruction to quote the minimum as salary expectations.
 - International contractor or employer/EOR arrangement that supports Brazil.
 - Automotive, mobility, telematics, EV/battery, industrial ML and engineering tools
@@ -25,7 +29,7 @@ Evaluate remote arrangement, Brazil eligibility, payment currency, compensation,
 required working-hour overlap, and role fit independently. Use PASS / FLAG / FAIL.
 Store source URL, exact supporting excerpt and checked date for each factual gate.
 
-FAIL: mandatory office attendance or relocation, explicit Brazil exclusion,
+For the default Brazil/USD track, FAIL: mandatory office attendance or relocation, explicit Brazil exclusion,
 residency-only restriction incompatible with living in Brazil, non-USD payment,
 confirmed incompatible working-hour overlap or contract arrangement,
 or a confirmed salary maximum below the threshold.
@@ -50,6 +54,9 @@ paid hours/month; show the assumption. No default 160-hour or 40-hour assumption
 For repeatable salary/eligibility classification, write the reviewed posting fields
 to ignored reports/<job>-eligibility.json and run:
 `python tools/remote_gate.py reports/<job>-eligibility.json`.
+The default floor is USD 5,000/month. An explicitly chosen alternative is passed as
+`--floor-monthly-usd AMOUNT`; keep the chosen floor in the review notes and never
+lower it just to fill a quota.
 The schema/example is config/remote-job.example.json. This helper does not extract
 facts or override the user's profile; the agent supplies source-grounded fields.
 Record its verdict and reasons in the job's fit notes without changing tracker schema.
@@ -58,6 +65,25 @@ excerpts: missing values remain FLAG and false values are FAIL. Recheck older
 eligibility records rather than guessing these values during migration.
 A FAIL vetoes recommendation/drafting unless the user explicitly changes that criterion.
 A FLAG remains visible; ask only the missing question that affects the next action.
+
+## Additional currency and relocation tracks
+
+EUR-paid remote roles may be reviewed in a separate currency track. Record the
+actual payment currency and gross base period. The USD-only helper above does not
+evaluate EUR pay: do not call its USD verdict a global rejection, convert a display
+currency into payment evidence, or assume that EUR 5,000 equals USD 5,000. Keep
+compensation as FLAG until the user supplies a EUR floor or approves a sourced,
+dated exchange-rate comparison. Brazil eligibility and the other evidence gates
+still apply to remote work from Brazil.
+
+When authorized by the user's private preferences, review relocation roles in a
+separate track, including Europe, Japan and New Zealand. Confirm role location,
+required work authorization and employer sponsorship where applicable. Missing
+sponsorship evidence remains FLAG; an explicitly incompatible requirement is FAIL.
+Affordability and any dependent's eligibility require separate, sourced review.
+Never infer take-home pay, visa rights or dependent work rights from a gross salary.
+Keep personal household and financial details in the private workspace. Neither
+additional track is a PASS under the Brazil/USD helper or permission to apply.
 
 ## Tailoring and evidence
 

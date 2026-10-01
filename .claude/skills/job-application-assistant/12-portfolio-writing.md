@@ -1,3 +1,7 @@
+---
+framework_version: 1.0.0
+---
+
 # Portfolio writing from existing projects
 
 Read during daily career reviews, portfolio planning, and project milestone reviews.

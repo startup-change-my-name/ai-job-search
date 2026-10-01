@@ -54,6 +54,7 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -112,7 +113,13 @@ def parse_iso(value) -> date | None:
 
 
 def norm(text) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+    """Ignore case and separators without discarding non-Latin identity."""
+    text = unicodedata.normalize("NFC", str(text or "").casefold())
+    # Combining marks can distinguish names even after NFC (e.g. Indic vowels).
+    return "".join(
+        char for char in text
+        if char.isalnum() or unicodedata.category(char).startswith("M")
+    )
 
 
 def profile_hash() -> str:
@@ -138,7 +145,7 @@ def tracker_pairs(path: Path) -> set[tuple[str, str]]:
     import csv
 
     pairs = set()
-    with path.open(encoding="utf-8", newline="") as fh:
+    with path.open(encoding="utf-8-sig", newline="") as fh:
         for row in csv.DictReader(fh):
             company, role = norm(row.get("company")), norm(row.get("role"))
             if company:
@@ -265,8 +272,10 @@ def overall_score(scores: dict) -> int:
     total = 0.0
     for dim, weight in WEIGHTS.items():
         value = scores.get(dim)
-        if not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"missing or non-numeric score '{dim}'")
+        if not 0 <= value <= 100:
+            raise ValueError(f"score '{dim}' must be finite and between 0 and 100")
         total += float(value) * weight
     return int(total + 0.5)
 
@@ -471,7 +480,7 @@ def cmd_shortlist(args) -> int:
     min_score = args.min_score if args.min_score is not None else 0
     items = [i for i in items if isinstance(i["rank_score"], (int, float)) and i["rank_score"] >= min_score]
     items.sort(key=lambda i: (i["rank_score"], i.get("deadline") is not None), reverse=True)
-    if args.top is not None and args.top >= 0:
+    if args.top is not None and args.top > 0:
         items = items[: args.top]
 
     print(
@@ -489,7 +498,21 @@ def cmd_shortlist(args) -> int:
     return 0
 
 
+def _force_utf8_output() -> None:
+    """Write UTF-8 whatever the host's default encoding is.
+
+    A piped stdout on Windows defaults to the ANSI code page (cp1252 on most
+    Western installs), so printing a company, title or file name outside it
+    raised UnicodeEncodeError before the workflow saw any output.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)  # absent on a StringIO under test
+        if reconfigure:
+            reconfigure(encoding="utf-8")
+
+
 def main() -> int:
+    _force_utf8_output()
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state", type=Path, default=STATE)
     common.add_argument("--today", type=date.fromisoformat, default=date.today())
@@ -519,6 +542,7 @@ def main() -> int:
     short.add_argument("--tracker", type=Path, default=TRACKER)
     short.add_argument("--top", type=int, default=DEFAULT_TOP, help="0 for no cap")
     short.add_argument("--min-score", type=int, default=0, help="drop entries below this rank_score")
+    short.add_argument("--json", action="store_true", help="emit JSON (the default; accepted for workflow compatibility)")
     short.set_defaults(func=cmd_shortlist)
 
     args = ap.parse_args()
